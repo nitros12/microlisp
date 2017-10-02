@@ -131,17 +131,35 @@ struct object *ht_lookup(char *s) {
 /*==============================================================================
   Memory management
 ==============================================================================*/
+
+/* Store working object pointers in the stack.
+ * each stack will hold reference to parent workspaces, up to this root on here
+ * workspace will always end with a 1 pointer followed by the start address of
+ * the next workspace.
+ */
+void *workspace_base[2] = {(void *)1, NULL};
+
+/* create a workspace, set 1 pointer and set up workspace_root*/
+#define create_workspace(size)                                                 \
+    void *workspace_ARRAY[size + 2] = {0};                                     \
+    workspace_ARRAY[size] = (void *)1;                                         \
+    workspace_ARRAY[size + 1] = workspace;                                     \
+    workspace = workspace_ARRAY;
+
+#define set_local(pos, var) (((struct object **)workspace)[pos] = var)
+
 int total_alloc = 0;
 int current_alloc = 0;
 
-void run_gc(struct object *);
+void run_gc(void *);
 
 static struct object *GC_HEAD;
 
 void mark_object(struct object *);
 
-struct object *alloc() {
+struct object *alloc(void *workspace) {
     // TODO: maybe create a allocation pool?
+    run_gc(workspace);
     struct object *ret = malloc(sizeof(struct object));
     if (GC_HEAD == NULL) {
         GC_HEAD = ret;
@@ -150,23 +168,10 @@ struct object *alloc() {
         ret->gc_next = GC_HEAD;
         GC_HEAD = ret;
     }
-    ret->mark = true;
+    ret->mark = false;
     total_alloc++;
     current_alloc++;
     return ret;
-}
-
-void mark_list(struct object *obj) {
-    mark_object(obj->car);
-    mark_object(obj->cdr);
-}
-
-void mark_vector(struct object *obj) {
-    int i;
-    for (i = 0; i < obj->vsize; i++) {
-        if (obj->vector[i] != NULL)
-            mark_object(obj->vector[i]);
-    }
 }
 
 void mark_object(struct object *obj) {
@@ -175,11 +180,17 @@ void mark_object(struct object *obj) {
     obj->mark = true;
     switch (obj->type) {
     case LIST:
-        mark_list(obj);
+        mark_object(obj->car);
+        mark_object(obj->cdr);
         break;
-    case VECTOR:
-        mark_vector(obj);
+    case VECTOR: {
+        int i;
+        for (i = 0; i < obj->vsize; i++) {
+            if (obj->vector[i] != NULL)
+                mark_object(obj->vector[i]);
+        }
         break;
+    }
     default:
         break;
     }
@@ -230,23 +241,42 @@ int gc_sweep() {
     return freed;
 }
 
+void gc_mark(void *workspace_root) {
+    mark_object(ENV); // mark global environment
+    void **workspace = workspace_root;
+    /* pretty ugly this is
+     * iterate over workspace until we find the (void *)1 value
+     * marking off each object as we go.
+     * when we find the (void *)1 value, test if the last element is null
+     * if it is, we're at the end of the workspace chain.
+     */
+    for (;;) {
+        int i;
+        for (i = 0; workspace[i] != (void *)1; i++) {
+            if (workspace[i] != NULL)
+                mark_object((struct object *)workspace[i]);
+        }
+        if ((workspace = (void *)workspace[i + 1]) == NULL)
+            break;
+    }
+}
+
 /* invoke the garbage collector */
-int gc_pass(struct object *env) {
-    mark_object(env);
-    mark_object(ENV);
+int gc_pass(void *workspace) {
+    gc_mark(workspace);
     return gc_sweep();
 }
 
 /* invoke the garbage collector if above threshold */
-void run_gc(struct object *env) {
+void run_gc(void *workspace) {
 #ifdef FORCE_GC
-    gc_pass(env);
+    gc_pass(workspace);
     return;
 #endif
     if (null(GC_THRESHOLD))
         return;
     if (current_alloc > GC_THRESHOLD->integer)
-        gc_pass(env);
+        gc_pass(workspace);
 }
 
 /*============================================================================
@@ -266,8 +296,8 @@ int __type_check(const char *func, struct object *obj, type_t type) {
     return 1;
 }
 
-struct object *make_vector(int size) {
-    struct object *ret = alloc();
+struct object *make_vector(void *workspace, int size) {
+    struct object *ret = alloc(workspace);
     ret->type = VECTOR;
     ret->vector = malloc(sizeof(struct object *) * size);
     ret->vsize = size;
@@ -277,10 +307,10 @@ struct object *make_vector(int size) {
     return ret;
 }
 
-struct object *make_symbol(char *s) {
+struct object *make_symbol(void *workspace, char *s) {
     struct object *ret = ht_lookup(s);
     if (null(ret)) {
-        ret = alloc();
+        ret = alloc(workspace);
         ret->type = SYMBOL;
         ret->string = strdup(s);
         ht_insert(ret);
@@ -288,15 +318,15 @@ struct object *make_symbol(char *s) {
     return ret;
 }
 
-struct object *make_integer(int x) {
-    struct object *ret = alloc();
+struct object *make_integer(void *workspace, int x) {
+    struct object *ret = alloc(workspace);
     ret->type = INTEGER;
     ret->integer = x;
     return ret;
 }
 
-struct object *make_primitive(primitive_t x) {
-    struct object *ret = alloc();
+struct object *make_primitive(void *workspace, primitive_t x) {
+    struct object *ret = alloc(workspace);
     ret->type = PRIMITIVE;
     ret->primitive = x;
     return ret;
@@ -311,8 +341,11 @@ struct object *make_procedure(struct object *params, struct object *body,
     return cons(PROCEDURE, cons(params, cons(body, cons(env, EMPTY_LIST))));
 }
 
-struct object *cons(struct object *x, struct object *y) {
-    struct object *ret = alloc();
+struct object *cons(void *workspace, struct object *x, struct object *y) {
+    create_workspace(2);
+    set_local(0, x);
+    set_local(1, y);
+    struct object *ret = alloc(workspace);
     ret->type = LIST;
     ret->car = x;
     ret->cdr = y;
@@ -644,7 +677,6 @@ struct object *define_variable(struct object *var, struct object *val,
     struct object *frame = car(env);
     struct object *vars = car(frame);
     struct object *vals = cdr(frame);
-
     while (!null(vars)) {
         if (is_equal(var, car(vars))) {
             vals->car = val;
@@ -1085,6 +1117,6 @@ int main(int argc, char **argv) {
             print_exp("====>", exp);
             printf("\n");
         }
-        run_gc(ENV);
+        run_gc();
     }
 }
