@@ -78,7 +78,7 @@ void print_exp(char *, struct object *);
 bool is_tagged(struct object *cell, struct object *tag);
 struct object *read_exp(FILE *in);
 struct object *eval(struct object *exp, struct object *env);
-struct object *cons(struct object *x, struct object *y);
+struct object *cons(void *, struct object *x, struct object *y);
 struct object *load_file(struct object *args);
 struct object *cdr(struct object *);
 struct object *car(struct object *);
@@ -364,16 +364,22 @@ struct object *cdr(struct object *cell) {
     return cell->cdr;
 }
 
-struct object *append(struct object *l1, struct object *l2) {
+struct object *append(void *workspace, struct object *l1, struct object *l2) {
     if (null(l1))
         return l2;
-    return cons(car(l1), append(cdr(l1), l2));
+    create_workspace(2);
+    set_local(0, l1);
+    set_local(1, l2);
+    return cons(car(l1), append(workspace, cdr(l1), l2));
 }
 
-struct object *reverse(struct object *list, struct object *first) {
+struct object *reverse(void *workspace, struct object *list, struct object *first) {
     if (null(list))
         return first;
-    return reverse(cdr(list), cons(car(list), first));
+    create_workspace(2);
+    set_local(0, list);
+    set_local(1, first);
+    return reverse(workspace, cdr(list), cons(workspace, car(list), first));
 }
 
 bool is_equal(struct object *x, struct object *y) {
@@ -419,89 +425,91 @@ int length(struct object *exp) {
 Primitive operations
 ==============================================================================*/
 
-struct object *prim_type(struct object *args) {
+struct object *prim_type(void *workspace, struct object *args) {
     char *types[6] = {"integer", "symbol",    "string",
                       "list",    "primitive", "vector"};
-    return make_symbol(types[car(args)->type]);
+    create_workspace(1);
+    set_local(0, args);
+    return make_symbol(workspace, types[car(args)->type]);
 }
 
-struct object *prim_get_env(struct object *args) {
+struct object *prim_get_env(void *workspace, struct object *args) {
     return ENV;
 }
-struct object *prim_set_env(struct object *args) {
+struct object *prim_set_env(void *workspace, struct object *args) {
     ENV = car(args);
     return NIL;
 }
 
-struct object *prim_list(struct object *args) {
+struct object *prim_list(void *workspace, struct object *args) {
     return (args);
 }
-struct object *prim_cons(struct object *args) {
-    return cons(car(args), cadr(args));
+struct object *prim_cons(void *workspace, struct object *args) {
+  return cons(workspace, car(args), cadr(args));
 }
 
-struct object *prim_car(struct object *args) {
+struct object *prim_car(void *workspace, struct object *args) {
 #ifdef STRICT
     ASSERT_TYPE(car(args), LIST);
 #endif
     return caar(args);
 }
 
-struct object *prim_cdr(struct object *args) {
+struct object *prim_cdr(void *workspace, struct object *args) {
 #ifdef STRICT
     ASSERT_TYPE(car(args), LIST);
 #endif
     return cdar(args);
 }
 
-struct object *prim_setcar(struct object *args) {
+struct object *prim_setcar(void *workspace, struct object *args) {
     ASSERT_TYPE(car(args), LIST);
     (args->car->car = (cadr(args)));
     return NIL;
 }
-struct object *prim_setcdr(struct object *args) {
+struct object *prim_setcdr(void *workspace, struct object *args) {
     ASSERT_TYPE(car(args), LIST);
     (args->car->cdr = (cadr(args)));
     return NIL;
 }
 
-struct object *prim_nullq(struct object *args) {
+struct object *prim_nullq(void *workspace, struct object *args) {
     return EOL(car(args)) ? TRUE : FALSE;
 }
 
-struct object *prim_pairq(struct object *args) {
+struct object *prim_pairq(void *workspace, struct object *args) {
     if (car(args)->type != LIST)
         return FALSE;
     return (atom(caar(args)) && atom(cdar(args))) ? TRUE : FALSE;
 }
 
-struct object *prim_listq(struct object *args) {
+struct object *prim_listq(void *workspace, struct object *args) {
     struct object *list;
     if (car(args)->type != LIST)
         return FALSE;
     for (list = car(args); !null(list); list = list->cdr)
         if (!null(list->cdr) && (list->cdr->type != LIST))
             return FALSE;
-    return (car(args)->type == LIST && prim_pairq(args) != TRUE) ? TRUE : FALSE;
+    return (car(args)->type == LIST && prim_pairq(NULL, args) != TRUE) ? TRUE : FALSE;
 }
 
-struct object *prim_atomq(struct object *sexp) {
+struct object *prim_atomq(void *workspace, struct object *sexp) {
     return atom(car(sexp)) ? TRUE : FALSE;
 }
 
 /* = primitive, only valid for numbers */
-struct object *prim_neq(struct object *args) {
+struct object *prim_neq(void *workspace, struct object *args) {
     if ((car(args)->type != INTEGER) || (cadr(args)->type != INTEGER))
         return FALSE;
     return (car(args)->integer == cadr(args)->integer) ? TRUE : FALSE;
 }
 
 /* eq? primitive, checks memory location, or if equal values for primitives */
-struct object *prim_eq(struct object *args) {
+struct object *prim_eq(void *workspace, struct object *args) {
     return is_equal(car(args), cadr(args)) ? TRUE : FALSE;
 }
 
-struct object *prim_equal(struct object *args) {
+struct object *prim_equal(void *workspace, struct object *args) {
     if (is_equal(car(args), cadr(args)))
         return TRUE;
     if ((car(args)->type == LIST) && (cadr(args)->type == LIST)) {
@@ -519,7 +527,7 @@ struct object *prim_equal(struct object *args) {
     return FALSE;
 }
 
-struct object *prim_add(struct object *list) {
+struct object *prim_add(void *workspace, struct object *list) {
     ASSERT_TYPE(car(list), INTEGER);
     int64_t total = car(list)->integer;
     list = cdr(list);
@@ -528,10 +536,10 @@ struct object *prim_add(struct object *list) {
         total += car(list)->integer;
         list = cdr(list);
     }
-    return make_integer(total);
+    return make_integer(workspace, total);
 }
 
-struct object *prim_sub(struct object *list) {
+struct object *prim_sub(void *workspace, struct object *list) {
     ASSERT_TYPE(car(list), INTEGER);
     int64_t total = car(list)->integer;
     list = cdr(list);
@@ -540,10 +548,10 @@ struct object *prim_sub(struct object *list) {
         total -= car(list)->integer;
         list = cdr(list);
     }
-    return make_integer(total);
+    return make_integer(workspace, total);
 }
 
-struct object *prim_div(struct object *list) {
+struct object *prim_div(void *workspace, struct object *list) {
     ASSERT_TYPE(car(list), INTEGER);
     int64_t total = car(list)->integer;
     list = cdr(list);
@@ -552,10 +560,10 @@ struct object *prim_div(struct object *list) {
         total /= car(list)->integer;
         list = cdr(list);
     }
-    return make_integer(total);
+    return make_integer(workspace, total);
 }
 
-struct object *prim_mul(struct object *list) {
+struct object *prim_mul(void *workspace, struct object *list) {
     ASSERT_TYPE(car(list), INTEGER);
     int64_t total = car(list)->integer;
     list = cdr(list);
@@ -564,35 +572,35 @@ struct object *prim_mul(struct object *list) {
         total *= car(list)->integer;
         list = cdr(list);
     }
-    return make_integer(total);
+    return make_integer(workspace, total);
 }
-struct object *prim_gt(struct object *sexp) {
+struct object *prim_gt(void *workspace, struct object *sexp) {
     ASSERT_TYPE(car(sexp), INTEGER);
     ASSERT_TYPE(cadr(sexp), INTEGER);
     return (car(sexp)->integer > cadr(sexp)->integer) ? TRUE : NIL;
 }
 
-struct object *prim_lt(struct object *sexp) {
+struct object *prim_lt(void *workspace, struct object *sexp) {
     ASSERT_TYPE(car(sexp), INTEGER);
     ASSERT_TYPE(cadr(sexp), INTEGER);
     return (car(sexp)->integer < cadr(sexp)->integer) ? TRUE : NIL;
 }
 
-struct object *prim_print(struct object *args) {
+struct object *prim_print(void *workspace, struct object *args) {
     print_exp(NULL, car(args));
     printf("\n");
     return NIL;
 }
 
-struct object *prim_exit(struct object *args) {
+struct object *prim_exit(void *workspace, struct object *args) {
     exit(0);
 }
 
-struct object *prim_read(struct object *args) {
+struct object *prim_read(void *workspace, struct object *args) {
     return read_exp(stdin);
 }
 
-struct object *prim_vget(struct object *args) {
+struct object *prim_vget(void *workspace, struct object *args) {
     ASSERT_TYPE(car(args), VECTOR);
     ASSERT_TYPE(cadr(args), INTEGER);
     if (cadr(args)->integer >= car(args)->vsize)
@@ -600,7 +608,7 @@ struct object *prim_vget(struct object *args) {
     return car(args)->vector[cadr(args)->integer];
 }
 
-struct object *prim_vset(struct object *args) {
+struct object *prim_vset(void *workspace, struct object *args) {
     ASSERT_TYPE(car(args), VECTOR);
     ASSERT_TYPE(cadr(args), INTEGER);
     if (null(caddr(args)))
@@ -608,33 +616,36 @@ struct object *prim_vset(struct object *args) {
     if (cadr(args)->integer >= car(args)->vsize)
         return NIL;
     car(args)->vector[cadr(args)->integer] = caddr(args);
-    return make_symbol("ok");
+    return make_symbol(workspace, "ok");
 }
 
-struct object *prim_vec(struct object *args) {
-    ASSERT_TYPE(car(args), INTEGER);
-    return make_vector(car(args)->integer);
+struct object *prim_vec(void *workspace, struct object *args) {
+  ASSERT_TYPE(car(args), INTEGER);
+  return make_vector(workspace, car(args)->integer);
 }
 
-struct object *prim_current_alloc(struct object *args) {
-    return make_integer(current_alloc);
+struct object *prim_current_alloc(void *workspace, struct object *args) {
+  return make_integer(workspace, current_alloc);
 }
 
-struct object *prim_total_alloc(struct object *args) {
-    return make_integer(total_alloc);
+struct object *prim_total_alloc(void *workspace, struct object *args) {
+  return make_integer(workspace, total_alloc);
 }
 
-struct object *prim_gc_pass(struct object *args) {
-    return make_integer(gc_pass(ENV));
+struct object *prim_gc_pass(void *workspace, struct object *args) {
+  return make_integer(workspace, gc_pass(workspace));
 }
 
 /*==============================================================================
 Environment handling
 ==============================================================================*/
 
-struct object *extend_env(struct object *var, struct object *val,
+struct object *extend_env(void *workspace, struct object *var, struct object *val,
                           struct object *env) {
-    return cons(cons(var, val), env);
+  create_workspace(2);
+  set_local(0, var);
+  set_local(1, val);
+  return cons(workspace, cons(workspace, var, val), env);
 }
 
 struct object *lookup_variable(struct object *var, struct object *env) {
@@ -672,8 +683,8 @@ void set_variable(struct object *var, struct object *val, struct object *env) {
 }
 
 /* define_variable binds var to val in the *current* frame */
-struct object *define_variable(struct object *var, struct object *val,
-                               struct object *env) {
+struct object *define_variable(void *workspace, struct object *var,
+                               struct object *val, struct object *env) {
     struct object *frame = car(env);
     struct object *vars = car(frame);
     struct object *vals = cdr(frame);
@@ -685,8 +696,11 @@ struct object *define_variable(struct object *var, struct object *val,
         vars = cdr(vars);
         vals = cdr(vals);
     }
-    frame->car = cons(var, car(frame));
-    frame->cdr = cons(val, cdr(frame));
+    create_workspace(2);
+    set_local(0, var);
+    set_local(1, val);
+    frame->car = cons(workspace, var, car(frame));
+    frame->cdr = cons(workspace, val, cdr(frame));
     return val;
 }
 
@@ -767,7 +781,7 @@ struct object *read_quote(FILE *in) {
 
 int depth = 0;
 
-struct object *read_exp(FILE *in) {
+struct object *read_exp(void *workspace, FILE *in) {
     int c;
 
     for (;;) {
@@ -799,9 +813,9 @@ struct object *read_exp(FILE *in) {
             return EMPTY_LIST;
         }
         if (isdigit(c))
-            return make_integer(read_int(in, c - '0'));
+          return make_integer(workspace, read_int(in, c - '0'));
         if (c == '-' && isdigit(peek(in)))
-            return make_integer(-1 * read_int(in, getc(in) - '0'));
+          return make_integer(workspace, -1 * read_int(in, getc(in) - '0'));
         if (isalpha(c) || strchr(SYMBOLS, c))
             return read_symbol(in, c);
     }
@@ -859,21 +873,26 @@ void print_exp(char *str, struct object *e) {
 LISP evaluator
 ==============================================================================*/
 
-struct object *evlis(struct object *exp, struct object *env) {
+struct object *evlis(void *workspace, struct object *exp, struct object *env) {
     if (null(exp))
         return NIL;
-    return cons(eval(car(exp), env), evlis(cdr(exp), env));
+    create_workspace(1);
+    set_local(0, exp);
+    return cons(workspace, eval(workspace, car(exp), env),
+                evlis(workspace, cdr(exp), env));
 }
 
-struct object *eval_sequence(struct object *exps, struct object *env) {
+struct object *eval_sequence(void *workspace, struct object *exps, struct object *env) {
     if (null(cdr(exps)))
         return eval(car(exps), env);
-    eval(car(exps), env);
-    return eval_sequence(cdr(exps), env);
+    eval(workspace, car(exps), env);
+    return eval_sequence(workspace, cdr(exps), env);
 }
 
-struct object *eval(struct object *exp, struct object *env) {
+struct object *eval(void *workspace, struct object *exp, struct object *env) {
+  create_workspace(4);
 tail:
+  set_local(0, exp);
     mark_object(exp);
     if (null(exp) || exp == EMPTY_LIST) {
         return NIL;
@@ -894,46 +913,46 @@ tail:
         return make_procedure(cadr(exp), cddr(exp), env);
     } else if (is_tagged(exp, DEFINE)) {
         if (atom(cadr(exp))) {
-            define_variable(cadr(exp), eval(caddr(exp), env), env);
+          define_variable(workspace, cadr(exp), eval(workspace, caddr(exp), env), env);
         } else {
             struct object *closure =
-                eval(make_lambda(cdr(cadr(exp)), cddr(exp)), env);
-            define_variable(car(cadr(exp)), closure, env);
+              eval(workspace, make_lambda(workspace, cdr(cadr(exp)), cddr(exp)), env);
+            define_variable(workspace, car(cadr(exp)), closure, env);
         }
-        return make_symbol("ok");
+        return make_symbol(workspace, "ok");
     } else if (is_tagged(exp, BEGIN)) {
         struct object *args = cdr(exp);
         for (; !null(cdr(args)); args = cdr(args))
-            eval(car(args), env);
+          eval(workspace, car(args), env);
         exp = car(args);
         goto tail;
     } else if (is_tagged(exp, IF)) {
-        struct object *predicate = eval(cadr(exp), env);
+      struct object *predicate = eval(workspace, cadr(exp), env);
         exp = (not_false(predicate)) ? caddr(exp) : cadddr(exp);
         goto tail;
-    } else if (is_tagged(exp, make_symbol("or"))) {
-        struct object *predicate = eval(cadr(exp), env);
+    } else if (is_tagged(exp, make_symbol(workspace, "or"))) {
+      struct object *predicate = eval(workspace, cadr(exp), env);
         exp = (not_false(predicate)) ? caddr(exp) : cadddr(exp);
         goto tail;
-    } else if (is_tagged(exp, make_symbol("cond"))) {
-        struct object *branch = cdr(exp);
-        for (; !null(branch); branch = cdr(branch)) {
-            if (is_tagged(car(branch), make_symbol("else")) ||
-                not_false(eval(caar(branch), env))) {
-                exp = cons(BEGIN, cdar(branch));
-                goto tail;
-            }
-        }
-        return NIL;
+    } else if (is_tagged(exp, make_symbol(workspace, "cond"))) {
+      struct object *branch = cdr(exp);
+      for (; !null(branch); branch = cdr(branch)) {
+          if (is_tagged(car(branch), make_symbol(workspace, "else")) ||
+              not_false(eval(workspace, caar(branch), env))) {
+            exp = cons(workspace, BEGIN, cdar(branch));
+            goto tail;
+          }
+      }
+      return NIL;
     } else if (is_tagged(exp, SET)) {
         if (atom(cadr(exp)))
-            set_variable(cadr(exp), eval(caddr(exp), env), env);
+          set_variable(workspace, cadr(exp), eval(workspace, caddr(exp), env), env);
         else {
             struct object *closure =
-                eval(make_lambda(cdr(cadr(exp)), cddr(exp)), env);
-            set_variable(car(cadr(exp)), closure, env);
+              eval(workspace, make_lambda(workspace, cdr(cadr(exp)), cddr(exp)), env);
+            set_variable(workspace, car(cadr(exp)), closure, env);
         }
-        return make_symbol("ok");
+        return make_symbol(workspace, "ok");
     } else if (is_tagged(exp, LET)) {
         /* We go with the strategy of transforming let into a lambda function*/
         struct object **tmp;
@@ -947,20 +966,24 @@ tail:
                 vars = cons(caar(*tmp), vars);
                 vals = cons(cadar(*tmp), vals);
             }
+            set_local(1, vars);
+            set_local(2, vals);
             /* Define the named let as a lambda function */
-            define_variable(cadr(exp),
-                            eval(make_lambda(vars, cdr(cddr(exp))),
-                                 extend_env(vars, vals, env)),
+            define_variable(workspace, cadr(exp),
+                            eval(workspace, make_lambda(workspace, vars, cdr(cddr(exp))),
+                                 extend_env(workspace, vars, vals, env)),
                             env);
             /* Then evaluate the lambda function with the starting values */
-            exp = cons(cadr(exp), vals);
+            exp = cons(workspace, cadr(exp), vals);
             goto tail;
         }
         for (tmp = &exp->cdr->car; !null(*tmp); tmp = &(*tmp)->cdr) {
             vars = cons(caar(*tmp), vars);
             vals = cons(cadar(*tmp), vals);
         }
-        exp = cons(make_lambda(vars, cddr(exp)), vals);
+        set_local(1, vars);
+        set_local(2, vals);
+        exp = cons(workspace, make_lambda(workspace, vars, cddr(exp)), vals);
         goto tail;
     } else {
         /* procedure structure is as follows:
@@ -978,9 +1001,11 @@ tail:
         if (proc->type == PRIMITIVE)
             return proc->primitive(args);
         if (is_tagged(proc, PROCEDURE)) {
-            env = extend_env(cadr(proc), args, cadddr(proc));
-            exp = cons(BEGIN, caddr(proc)); /* procedure body */
-            goto tail;
+          set_local(1, proc);
+          set_local(2, args);
+          env = extend_env(workspace, cadr(proc), args, cadddr(proc));
+          exp = cons(workspace, BEGIN, caddr(proc)); /* procedure body */
+          goto tail;
         }
     }
     print_exp("Invalid arguments to eval:", exp);
@@ -989,7 +1014,7 @@ tail:
 }
 
 extern char **environ;
-struct object *prim_exec(struct object *args) {
+struct object *prim_exec(void *workspace, struct object *args) {
     ASSERT_TYPE(car(args), STRING);
     int l = length(args);
     struct object *tmp = args;
@@ -1015,69 +1040,69 @@ struct object *prim_exec(struct object *args) {
 }
 
 /* Initialize the global environment, add primitive functions and symbols */
-void init_env() {
-#define add_prim(s, c) define_variable(make_symbol(s), make_primitive(c), ENV)
-#define add_sym(s, c)                                                          \
+void init_env(void *workspace) {
+#define add_prim(s, c) define_variable(worspace, make_symbol(workspace, s), make_primitive(workspace, c), ENV)
+#define add_sym(s, c)                                                 \
     do {                                                                       \
-        c = make_symbol(s);                                                    \
-        define_variable(c, c, ENV);                                            \
+      c = make_symbol(w, s);                                             \
+      define_variable(w, c, c, ENV);                                     \
     } while (0);
-    ENV = extend_env(NIL, NIL, NIL);
-    add_sym("#t", TRUE);
-    add_sym("#f", FALSE);
-    add_sym("quote", QUOTE);
-    add_sym("lambda", LAMBDA);
-    add_sym("procedure", PROCEDURE);
-    add_sym("define", DEFINE);
-    add_sym("let", LET);
-    add_sym("set!", SET);
-    add_sym("begin", BEGIN);
-    add_sym("if", IF);
-    define_variable(make_symbol("true"), TRUE, ENV);
-    define_variable(make_symbol("false"), FALSE, ENV);
-    // default garbage collector threshold of 255 objects
-    GC_THRESHOLD = make_symbol("gc-threshold");
-    define_variable(GC_THRESHOLD, make_integer(255), ENV);
-
-    add_prim("cons", prim_cons);
-    add_prim("car", prim_car);
-    add_prim("cdr", prim_cdr);
-    add_prim("set-car!", prim_setcar);
-    add_prim("set-cdr!", prim_setcdr);
-    add_prim("list", prim_list);
-    add_prim("list?", prim_listq);
-    add_prim("null?", prim_nullq);
-    add_prim("pair?", prim_pairq);
-    add_prim("atom?", prim_atomq);
-    add_prim("eq?", prim_eq);
-    add_prim("equal?", prim_equal);
-
-    add_prim("+", prim_add);
-    add_prim("-", prim_sub);
-    add_prim("*", prim_mul);
-    add_prim("/", prim_div);
-    add_prim("=", prim_neq);
-    add_prim("<", prim_lt);
-    add_prim(">", prim_gt);
-
-    add_prim("type", prim_type);
-    add_prim("load", load_file);
-    add_prim("print", prim_print);
-    add_prim("get-global-environment", prim_get_env);
-    add_prim("set-global-environment", prim_set_env);
-    add_prim("exit", prim_exit);
-    add_prim("exec", prim_exec);
-    add_prim("read", prim_read);
-    add_prim("vector", prim_vec);
-    add_prim("vector-get", prim_vget);
-    add_prim("vector-set", prim_vset);
-    add_prim("current-allocated", prim_current_alloc);
-    add_prim("total-allocated", prim_total_alloc);
-    add_prim("gc-pass", prim_gc_pass);
+  ENV = extend_env(workspace, NIL, NIL, NIL);
+  add_sym("#t", TRUE);
+  add_sym("#f", FALSE);
+  add_sym("quote", QUOTE);
+  add_sym("lambda", LAMBDA);
+  add_sym("procedure", PROCEDURE);
+  add_sym("define", DEFINE);
+  add_sym("let", LET);
+  add_sym("set!", SET);
+  add_sym("begin", BEGIN);
+  add_sym("if", IF);
+  define_variable(make_symbol("true"), TRUE, ENV);
+  define_variable(make_symbol("false"), FALSE, ENV);
+  // default garbage collector threshold of 255 objects
+  GC_THRESHOLD = make_symbol("gc-threshold");
+  define_variable(GC_THRESHOLD, make_integer(255), ENV);
+  
+  add_prim("cons", prim_cons);
+  add_prim("car", prim_car);
+  add_prim("cdr", prim_cdr);
+  add_prim("set-car!", prim_setcar);
+  add_prim("set-cdr!", prim_setcdr);
+  add_prim("list", prim_list);
+  add_prim("list?", prim_listq);
+  add_prim("null?", prim_nullq);
+  add_prim("pair?", prim_pairq);
+  add_prim("atom?", prim_atomq);
+  add_prim("eq?", prim_eq);
+  add_prim("equal?", prim_equal);
+  
+  add_prim("+", prim_add);
+  add_prim("-", prim_sub);
+  add_prim("*", prim_mul);
+  add_prim("/", prim_div);
+  add_prim("=", prim_neq);
+  add_prim("<", prim_lt);
+  add_prim(">", prim_gt);
+  
+  add_prim("type", prim_type);
+  add_prim("load", load_file);
+  add_prim("print", prim_print);
+  add_prim("get-global-environment", prim_get_env);
+  add_prim("set-global-environment", prim_set_env);
+  add_prim("exit", prim_exit);
+  add_prim("exec", prim_exec);
+  add_prim("read", prim_read);
+  add_prim("vector", prim_vec);
+  add_prim("vector-get", prim_vget);
+  add_prim("vector-set", prim_vset);
+  add_prim("current-allocated", prim_current_alloc);
+  add_prim("total-allocated", prim_total_alloc);
+  add_prim("gc-pass", prim_gc_pass);
 }
 
 /* Loads and evaluates a file containing lisp s-expressions */
-struct object *load_file(struct object *args) {
+struct object *load_file(void *workspace, struct object *args) {
     struct object *exp;
     struct object *ret = NULL;
     char *filename = car(args)->string;
