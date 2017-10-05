@@ -147,7 +147,7 @@ void *workspace_base[2] = {(void *)1, NULL};
     workspace_ARRAY[size + 1] = workspace;                                     \
     workspace = workspace_ARRAY;
 
-#define set_local(pos, var) (((struct object ***)workspace)[pos] = &var)
+#define set_local(pos, var) (((struct object **)workspace)[pos] = var)
 
 int total_alloc = 0;
 int current_alloc = 0;
@@ -179,12 +179,14 @@ struct object *alloc(void *workspace) {
 
 void mark_object(struct object *obj) {
     if (obj == NULL) {
-        puts("fack");
+      //puts("fack");
         return;
     }
     if (obj->mark) return;
-
-
+#ifdef DEBUG_GC
+    print_exp("marking: ", obj);
+    putchar('\n');
+#endif
     obj->mark = true;
     switch (obj->type) {
     case LIST:
@@ -250,7 +252,16 @@ int gc_sweep() {
     return freed;
 }
 
+void unmark_all_objects() {
+  struct object *obj = GC_HEAD;
+  while (obj != NULL) {
+    obj->mark = false;
+    obj = obj->gc_next;
+  }
+}
+
 void gc_mark(void *workspace_root) {
+  unmark_all_objects();  // clear stuff so marked cons cells actuall mark their children.
     mark_object(ENV); // mark global environment
     void **workspace = workspace_root;
     /* pretty ugly this is
@@ -262,11 +273,7 @@ void gc_mark(void *workspace_root) {
     for (;;) {
         int i;
         for (i = 0; workspace[i] != (void *)1; i++) {
-            if (workspace[i] != NULL && *(void **)workspace[i] != NULL) {
-                mark_object(*(struct object **)workspace[i]);
-                //print_exp("marking object: ", *(struct object **)workspace[i]);
-                //putchar('\n');
-            }
+          mark_object((struct object *)workspace[i]);
         }
         if ((workspace = (void *)workspace[i + 1]) == NULL)
             break;
@@ -275,7 +282,9 @@ void gc_mark(void *workspace_root) {
 
 /* invoke the garbage collector */
 int gc_pass(void *workspace) {
-    gc_mark(workspace);
+  puts("BEGINNING GC MARK");
+  gc_mark(workspace);
+    puts("BEGINNGING GC SWEEP\n\n");
     return gc_sweep();
 }
 
@@ -685,7 +694,8 @@ struct object *lookup_variable(struct object *var, struct object *env) {
 
 /* set_variable binds var to val in the first frame in which var occurs */
 void set_variable(struct object *var, struct object *val, struct object *env) {
-    while (!null(env)) {
+  puts("setting variable");
+  while (!null(env)) {
         struct object *frame = car(env);
         struct object *vars = car(frame);
         struct object *vals = cdr(frame);
@@ -790,10 +800,11 @@ struct object *read_list(void *workspace, FILE *in) {
     set_local(1, cell);
     for (;;) {
         obj = read_exp(workspace, in);
-
+        set_local(0, obj);
         if (obj == EMPTY_LIST)
             return reverse(workspace, cell, EMPTY_LIST);
         cell = cons(workspace, obj, cell);
+        set_local(1, cell);
     }
     return EMPTY_LIST;
 }
@@ -920,9 +931,9 @@ struct object *eval_sequence(void *workspace, struct object *exps,
 
 struct object *eval(void *workspace, struct object *exp, struct object *env) {
     create_workspace(4);
+tail:
     set_local(0, exp);
     set_local(1, env);
-tail:
     if (null(exp) || exp == EMPTY_LIST) {
         return NIL;
     } else if (exp->type == INTEGER || exp->type == STRING) {
@@ -948,6 +959,7 @@ tail:
             struct object *closure =
                 eval(workspace,
                      make_lambda(workspace, cdr(cadr(exp)), cddr(exp)), env);
+            set_local(2, closure);
             define_variable(workspace, car(cadr(exp)), closure, env);
         }
         return make_symbol(workspace, "ok");
@@ -1001,7 +1013,9 @@ tail:
         if (atom(cadr(exp))) {
             for (tmp = &exp->cdr->cdr->car; !null(*tmp); tmp = &(*tmp)->cdr) {
                 vars = cons(workspace, caar(*tmp), vars);
+                set_local(2, vars);
                 vals = cons(workspace, cadar(*tmp), vals);
+                set_local(3, vals);
             }
             /* Define the named let as a lambda function */
             define_variable(workspace, cadr(exp),
@@ -1015,7 +1029,9 @@ tail:
         }
         for (tmp = &exp->cdr->car; !null(*tmp); tmp = &(*tmp)->cdr) {
             vars = cons(workspace, caar(*tmp), vars);
+            set_local(2, vars);
             vals = cons(workspace, cadar(*tmp), vals);
+            set_local(3, vals);
         }
         exp = cons(workspace, make_lambda(workspace, vars, cddr(exp)), vals);
         goto tail;
@@ -1053,8 +1069,9 @@ struct object *prim_exec(void *workspace, struct object *args) {
     ASSERT_TYPE(car(args), STRING);
     int l = length(args);
     struct object *tmp = args;
-    create_workspace(1);
-    set_local(0, args);
+    create_workspace(2);
+    set_local(0, tmp);
+    set_local(1, args);
 
     char **newarg = malloc(sizeof(char *) * (l + 1));
     char **n = newarg;
@@ -1062,6 +1079,7 @@ struct object *prim_exec(void *workspace, struct object *args) {
         ASSERT_TYPE(car(tmp), STRING);
         *n++ = car(tmp)->string;
         tmp = cdr(tmp);
+        set_local(0, tmp);
     }
     *n = NULL;
     int pid = fork();
@@ -1158,9 +1176,11 @@ struct object *load_file(void *workspace, struct object *args) {
 
     for (;;) {
         exp = read_exp(workspace, fp);
+        set_local(0, exp);
         if (null(exp))
             break;
         ret = eval(workspace, exp, ENV);
+        set_local(1, ret);
     }
     fclose(fp);
     return ret;
@@ -1185,6 +1205,7 @@ int main(int argc, char **argv) {
     for (;;) {
         printf("user> ");
         exp = eval(workspace, read_exp(workspace, stdin), ENV);
+        set_local(1, exp);
         if (!null(exp)) {
             print_exp("====>", exp);
             printf("\n");
