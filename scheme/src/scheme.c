@@ -1,4 +1,4 @@
-/* 
+/*
 Single file scheme interpreter
 
 MIT License
@@ -82,19 +82,19 @@ struct object {
 } __attribute__((packed));
 
 /* We declare a couple of global variables for keywords */
-static struct object *ENV = NULL;
-static struct object *NIL = NULL;
-static struct object *EMPTY_LIST = NULL;
-static struct object *TRUE = NULL;
-static struct object *FALSE = NULL;
-static struct object *QUOTE = NULL;
-static struct object *DEFINE = NULL;
-static struct object *SET = NULL;
-static struct object *LET = NULL;
-static struct object *IF = NULL;
-static struct object *LAMBDA = NULL;
-static struct object *BEGIN = NULL;
-static struct object *PROCEDURE = NULL;
+static struct object *ENV;
+static struct object *NIL;
+static struct object *EMPTY_LIST;
+static struct object *TRUE;
+static struct object *FALSE;
+static struct object *QUOTE;
+static struct object *DEFINE;
+static struct object *SET;
+static struct object *LET;
+static struct object *IF;
+static struct object *LAMBDA;
+static struct object *BEGIN;
+static struct object *PROCEDURE;
 
 void print_exp(char *, struct object *);
 bool is_tagged(struct object *cell, struct object *tag);
@@ -173,9 +173,15 @@ void *workspace_base[2] = {(void *)1, NULL};
 
 #define set_local(pos, var) (((struct object ***)workspace)[pos] = &var)
 
-size_t gc_total_alloc = 0; // total objects allocated over the runtime of the interpreter
+// copies the previous workspace into the current scope
+#define copy_workspace()                                                       \
+    void *workspace_ = workspace;                                              \
+    void *workspace = workspace_;
+
+size_t gc_total_alloc =
+    0; // total objects allocated over the runtime of the interpreter
 size_t gc_objects_used = 0; // total objects currently in use
-size_t gc_pool_size = 0; // total objects in pool
+size_t gc_pool_size = 0;    // total objects in pool
 // current objects currently allocated = gc_pool_size + gc_objects_used
 
 static struct object *GC_HEAD = NULL;
@@ -208,7 +214,8 @@ void gc_pool_maintain(void *workspace) {
 #endif
     if (gc_pool_size == gc_objects_used)
         grow_pool((gc_pool_size >> 1) + 1); // grow to 150%
-    else if (gc_objects_used < gc_pool_size >> 1) // shrink when we have more than 50% unused
+    else if (gc_objects_used<gc_pool_size>>
+             1) // shrink when we have more than 50% unused
         shrink_pool(gc_pool_size >> 2); // trim off 25%
 }
 
@@ -307,6 +314,8 @@ int gc_sweep() {
 #endif
             if (tmp->type == STRING || tmp->type == SYMBOL)
                 collect_hashed(tmp);
+            else if (tmp->type == VECTOR && tmp->vector != NULL)
+                free(tmp->vector);
             push_object(&GC_POOL_HEAD, tmp);
             freed++;
             gc_objects_used--;
@@ -666,6 +675,8 @@ struct object *prim_print(void *workspace, struct object *args) {
 }
 
 struct object *prim_exit(void *workspace, struct object *args) {
+    gc_sweep();
+    shrink_pool(gc_pool_size);
     exit(0);
 }
 
@@ -978,7 +989,7 @@ struct object *eval_sequence(void *workspace, struct object *exps,
 }
 
 struct object *eval(void *workspace, struct object *exp, struct object *env) {
-    create_workspace(6);
+    create_workspace(2);
     set_local(0, exp);
     set_local(1, env);
 tail:
@@ -1012,7 +1023,9 @@ tail:
         return make_symbol(workspace, "ok");
     } else if (is_tagged(exp, BEGIN)) {
         struct object *args = cdr(exp);
-        set_local(2, args);
+        copy_workspace();
+        create_workspace(1);
+        set_local(0, args);
         for (; !null(cdr(args)); args = cdr(args))
             eval(workspace, car(args), env);
         exp = car(args);
@@ -1027,7 +1040,9 @@ tail:
         goto tail;
     } else if (is_tagged(exp, make_symbol(workspace, "cond"))) {
         struct object *branch = cdr(exp);
-        set_local(2, branch);
+        copy_workspace();
+        create_workspace(1);
+        set_local(0, branch);
         for (; !null(branch); branch = cdr(branch)) {
             if (is_tagged(car(branch), make_symbol(workspace, "else")) ||
                 not_false(eval(workspace, caar(branch), env))) {
@@ -1051,23 +1066,29 @@ tail:
         struct object **tmp;
         struct object *vars = NIL;
         struct object *vals = NIL;
-        set_local(2, vars);
-        set_local(3, vals);
+        copy_workspace();
+        create_workspace(2);
+        set_local(0, vars);
+        set_local(1, vals);
         if (null(cadr(exp)))
             return NIL;
         /* NAMED LET */
         if (atom(cadr(exp))) {
             for (tmp = &exp->cdr->cdr->car; !null(*tmp); tmp = &(*tmp)->cdr) {
-                set_local(4, *tmp);
+                copy_workspace();
+                create_workspace(1);
+                set_local(0, *tmp);
                 vars = cons(workspace, caar(*tmp), vars);
                 vals = cons(workspace, cadar(*tmp), vals);
             }
             /* Define the named let as a lambda function */
+            copy_workspace();
+            create_workspace(2);
             struct object *lambda =
                 make_lambda(workspace, vars, cdr(cddr(exp)));
-            set_local(4, lambda);
+            set_local(0, lambda);
             struct object *new_env = extend_env(workspace, vars, vals, env);
-            set_local(5, new_env);
+            set_local(1, new_env);
             define_variable(workspace, cadr(exp),
                             eval(workspace, lambda, new_env), env);
             /* Then evaluate the lambda function with the starting values */
@@ -1083,10 +1104,12 @@ tail:
     } else {
         /* procedure structure is as follows:
            ('procedure, (parameters), (body), (env)) */
+        copy_workspace();
+        create_workspace(2);
         struct object *proc = eval(workspace, car(exp), env);
-        set_local(2, proc);
+        set_local(0, proc);
         struct object *args = evlis(workspace, cdr(exp), env);
-        set_local(3, args);
+        set_local(1, args);
         if (null(proc)) {
 #ifdef STRICT
             print_exp("Invalid arguments to eval:", exp);
